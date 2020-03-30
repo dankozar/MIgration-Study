@@ -1,13 +1,10 @@
 %% Constants and Parameters
-clear
-p = 0.3.*ones(64,1);
+clear, clc
 v = 0.1; %volume of parcel, m^3
 l = 100;
 nt = 1:0.1:1000; % time (yrs)
-dt = 0.1 %Timestep (yrs)
-dx = 0.2;
-dtr = 0.1; %duration of rain event, minutes
-I(1) = v.*p(1)
+dt = 0.1; %Timestep (yrs)
+dx = 5;
 
 kfbar = 1; %Dimensionless facilitation parameter (-)
 kf = kfbar/dx; %Facilitation parameter (1/m)
@@ -27,41 +24,46 @@ Tmax = Bt*D/te; %Maximum transpiration rate (m/yr)
 Eb = Bb*D/te; % Evaporation at bare pixel 
 Ev = Bv*D/te; % Evaporation rate at vegetated pixel 
 bmax = 1; %maximum biomass (-)
-b = 0.2; %biomass growth per unit timestep (-)
 Tcbar = 2; %Threshold transpiration rate for growth (-)
 Tc = Tcbar*D/te; %Threshold transpiration rate (m/yr)
-
+wcbar = 0.048; %(-) Dimensionless water threshold for plant growth
+wc = wcbar*dx; %(m) threshold water for biomass growth in bare area
+growth = 0.2; %(kg/m2-yr) biomass growth increment 
 %% Create scene of vegetated (1) and bare(0) cells
-b = [1 1 1 1 0 0 0 1;
-    0 0 1 0 0 1 1 0;
-    0 0 0 1 0 1 1 0;
-    1 0 0 0 0 0 0 0;
-    0 1 1 0 0 1 0 0;
-    0 0 0 0 0 0 1 1;
-    1 0 1 1 1 0 0 0;
-    0 0 0 1 0 0 0 0];
-
+b = [1 0 0;
+     0 0 1;
+     0 0 0];
+ 
+p = 0.3.*ones(size(b,1),size(b,2));
 
 %Create blank matrix for water balance components
-I = zeros(size(b,1)*size(b,2),1);
 Imat = zeros(size(b,1)*size(b,2),numel(nt));
 Emat = zeros(size(b,1)*size(b,2),numel(nt));
 Tmat = zeros(size(b,1)*size(b,2),numel(nt));
 bmat = zeros(size(b,1)*size(b,2),numel(nt));
-
+bvecmat = zeros(size(b,1)*size(b,2),numel(nt));
 
 % Create blank matrix for water balance
 w = zeros(size(b,1)*size(b,2),numel(nt));
+x = randn(1,numel(b)); 
+w(:,1) = abs(x)./max(abs(x));
 %% For Loop for Governing Water Balance
 for t=1:numel(nt);
-    % Reshape b into vector 
-    bvec =  reshape(b,1,[]);    
+    %% create b vector 
+   bvec = zeros(size(b,1)*size(b,2),1);
+   bvec(b ~= 0) = 1; %transform b into 1 and 0 matrix for use in Ei
+   bvecmat(:,t) = bvec;
     %% Infitration, I
-    
-    for i = 2:numel(bvec);
-        I(i) = I(i-1) + v.*p(i).*(1-p(i)).^(i-1);
+    I = zeros(size(b,1),size(b,2));
+    runoff = zeros(size(b,1),size(b,2));
+    for i = 2:size(b,1);
+        I(i,:) = I(i-1,:) + v.*p(i,:).*(1-p(i,:)).^(i-1);
+        runoff(i,:) = v+(v-I(i-1,:))-I(i,:);
     end
-    I(1:size(b,1):end) = v.*(1-p(size(b,1):size(b,1):end)-1)-I(size(b,1):size(b,1):end);
+    
+    I(1,:) = (v+runoff(end,:)).*(1-p(1,:));
+    I = reshape(I,1,[]);
+    
     Imat(:,t) = I; 
     %% Hydraulic Concuctivity, K and Transpiration,T
     
@@ -72,8 +74,15 @@ for t=1:numel(nt);
     Y = reshape(Y,[],1);
     coordinates = horzcat(X,Y);
     r_mat = squareform(pdist(coordinates));
-    gf = repmat(reshape(b,1,[]),size(b,1)^2,1);%%%%%%%%%%%%%%%%%%%%
-    gc = repmat(w(:,t),[1,size(w(:,t))]); %%%%%%%%%%%%%%%%%%%%
+    
+    gf = repmat(reshape(b,1,[]),size(b,1)^2,1);
+    gf(gf > 0) = 1;
+    gf(gf <= 0) = 0;
+    
+    gc = repmat(w(:,t),[1,size(w(:,t))]); 
+    gc(gc > 0) = 1;
+    gc(gc <=0) = 0;
+    
     g_max = ones(size(b,1)^2);
     
     % Create f function to sum
@@ -91,7 +100,7 @@ for t=1:numel(nt);
     %%K = vec2mat(K_vec,size(b,2))
    
     
-    %%%%%% Ti !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    %%%%%% Ti 
     f_real_T = gc.*exp(-1*kc.^2.*(r_mat.^2));
     
     f_max_T = g_max.*exp(-1*kc.^2.*(r_mat.^2));
@@ -112,12 +121,21 @@ for t=1:numel(nt);
     E(indexE) = E(indexE) + Eb;
     Emat(:,t) = E;
     %% Biomass Growth
+    indexkill = find(T<Tc);
+    b(indexkill) = b(indexkill)-growth;
+    indexgrowth = find(T>=Tc);
+    b(indexgrowth) = b(indexgrowth)+growth;
+    indexzero = find(b<0);
+    b(indexzero) = 0;
+   
+    wmat = reshape(w(:,t),size(b,1),size(b,2));
     
-    %b = scene
-    indexb = find(T<Tc);
-    b(indexb) = 0;
-    indexbgrowth = find(T>=Tc);
-    b(indexbgrowth) = b(indexbgrowth)+0.2;
+    indexw = find(wmat>wc & b==0);
+    b(indexw) = b(indexw) + growth;
+    wmat(indexw) = wmat(indexw) - wc;
+    w(:,t) = reshape(wmat,1,numel(wmat));
+    
+    b(b > 2) = 2;
     bmat(:,t) = reshape(b,1,[]);
     
     
